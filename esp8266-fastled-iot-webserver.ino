@@ -55,18 +55,18 @@ extern "C" {
 
 /*######################## MAIN CONFIG ########################*/
 #define LED_TYPE            WS2812B                     // You might also use a WS2811 or any other strip that is Fastled compatible 
-#define DATA_PIN            D3                          // Be aware: the pin mapping might be different on boards like the NodeMCU
+#define DATA_PIN            D5                          // Be aware: the pin mapping might be different on boards like the NodeMCU
 //#define CLK_PIN             D5                        // Only required when using 4-pin SPI-based LEDs
 #define CORRECTION          UncorrectedColor            // If colors are weird use TypicalLEDStrip
 #define COLOR_ORDER         GRB                         // Change this if colors are swapped (in my case, red was swapped with green)
-#define MILLI_AMPS          10000                       // IMPORTANT: set the max milli-Amps of your power supply (4A = 4000mA)
-#define VOLTS               5                           // Voltage of the Power Supply
+#define MILLI_AMPS          2000                        // IMPORTANT: set the max milli-Amps of your power supply (4A = 4000mA)
+#define VOLTS               4.4                         // Voltage of the Power Supply
 
 //#define REMOVE_VISUALIZATION          // remove the comment to completly disable all udp-based visualization patterns
 
-#define HOSTNAME "LEDs"                 // Name that appears in your network, don't use whitespaces, use "-" instead
+#define HOSTNAME "frosty"                 // Name that appears in your network, don't use whitespaces, use "-" instead
 
-#define DEVICE_TYPE 0                   // The following types are available
+#define DEVICE_TYPE 6                   // The following types are available
 /*
     0: Generic LED-Strip: a regular LED-Strip without any special arrangement (and Infinity Mirror + Bottle Lighting Pad)
         * Easiest: 5V WS2812B LED-Strip:            https://s.click.aliexpress.com/e/_dZ1hCJ7
@@ -94,13 +94,14 @@ extern "C" {
     5: 3D-Printed Animated RGB Logos
         * Project link, Twenty-One-Pilots:          https://www.thingiverse.com/thing:3523487
         * Project link, Thingiverse:                https://www.thingiverse.com/thing:3531086
+    6: Countdown days timer
 */
 
 //---------------------------------------------------------------------------------------------------------//
 // Device Configuration:
 //---------------------------------------------------------------------------------------------------------//
 #if DEVICE_TYPE == 0                // Generic LED-Strip
-    #define NUM_LEDS 24
+    #define NUM_LEDS 6
     //#define NUM_LEDS 33
     //#define NUM_LEDS 183
     #define BAND_GROUPING    1            // Groups part of the band to save performance and network traffic
@@ -108,19 +109,23 @@ extern "C" {
     #define LENGTH 32
     #define HEIGHT 8
     //#define AddLogoVisualizers          // (only 32x8) Adds Visualization patterns with logo (currently only HBz)
-#elif DEVICE_TYPE == 2              // 7-Segment Clock
+#elif DEVICE_TYPE == 2 || DEVICE_TYPE == 6              // 7-Segment Clock or countdown
     #define NTP_REFRESH_INTERVAL_SECONDS 600            // 10 minutes
-    const char* ntpServerName = "at.pool.ntp.org";      // Austrian ntp-timeserver
-    int t_offset = 1;                                   // offset added to the time from the ntp server
+    const char* ntpServerName = "us.pool.ntp.org";      // US ntp-timeserver
+    int t_offset = -6;                                  // offset added to the time from the ntp server
     bool updateColorsEverySecond = false;               // if set to false it will update colors every minute (time patterns only)
     const int NTP_PACKET_SIZE = 48;
     bool switchedTimePattern = true;
-    #define NUM_LEDS 30
+    #define NUM_LEDS 28
     #define Digit1 0
-    #define Digit2 7
-    #define Digit3 16
-    #define Digit4 23
+    #define Digit2 14
+    // Digit3 and Digit4 are not needed for countdown
+    #define Digit3 30
+    #define Digit4 44
     // Values for the Big Clock: 58, 0, 14, 30, 44
+  #if DEVICE_TYPE == 6     // Christmas countdown
+    long christmasDay = 18624;
+  #endif
 
 #elif DEVICE_TYPE == 3              // Desk Lamp
     #define LINE_COUNT    8             // Amount of led strip pieces
@@ -317,14 +322,14 @@ if you have connected the ring first it should look like this: const int twpOffs
     #define PACKET_LENGTH LENGTH
     #define BAND_GROUPING    1
 
-#elif DEVICE_TYPE == 2
+#elif DEVICE_TYPE == 2 || DEVICE_TYPE == 6
     #define PACKET_LENGTH NUM_LEDS
     #define BAND_GROUPING    1
     IPAddress timeServerIP;
     WiFiUDP udpTime;
 
     byte packetBuffer[NTP_PACKET_SIZE];
-    int hours = 0; int mins = 0; int secs = 0;
+    int days = 0; int hours = 0; int mins = 0; int secs = 0;
     unsigned int localPortTime = 2390;
     unsigned long update_timestamp = 0;
     unsigned long last_diff = 0;
@@ -483,13 +488,13 @@ typedef PatternAndName PatternAndNameList[];
 PatternAndNameList patterns = {
 
     // Time patterns
-  #if DEVICE_TYPE == 2                
+#if DEVICE_TYPE == 2                
     { displayTimeStatic,      "Time" },
     { displayTimeColorful,     "Time Colorful" },
     { displayTimeGradient,     "Time Gradient" },
     { displayTimeGradientLarge,     "Time Gradient large" },
     { displayTimeRainbow,     "Time Rainbow" },
-  #endif
+#endif
 
 #if DEVICE_TYPE == 3
     { pride_Waves,            "Pride Waves" },
@@ -497,6 +502,10 @@ PatternAndNameList patterns = {
     { colorWaves_hori,        "Vertical Waves" },
     { colorWaves_vert,        "Color Rings" },
     { rainbow_vert,           "Vertical Rainbow" },
+#endif
+
+#if DEVICE_TYPE == 6
+    { displayDaysLeftUntilChristmasStatic,  "Days left until Christmas" },
 #endif
 
     // animation patterns
@@ -1020,7 +1029,7 @@ void setup() {
 
     webServer.on("/pattern", HTTP_POST, []() {
         String value = webServer.arg("value");
-        #if DEVICE_TYPE == 2
+        #if DEVICE_TYPE == 2 || DEVICE_TYPE == 6
         switchedTimePattern = true;
         #endif
         setPattern(value.toInt());
@@ -1095,11 +1104,16 @@ void setup() {
 
     Serial.println("HTTP web server started");
 
-#if DEVICE_TYPE == 2
-    bool sucess = false;
-    while (!sucess) {
-        sucess = GetTime();
-        if (!sucess) delay(300);
+#if DEVICE_TYPE == 2 || DEVICE_TYPE == 6
+    udpTime.begin(localPortTime);
+    int tries = 3;
+    while (tries-- > 0) {
+        if (GetTime()) {
+            tries = 0;
+        }
+        else {
+            delay(300);
+        }
     }
 #endif
     //  webSocketsServer.begin();
@@ -1108,6 +1122,7 @@ void setup() {
 
     autoPlayTimeout = millis() + (autoplayDuration * 1000);
 }
+
 void sendInt(uint8_t value)
 {
     sendString(String(value));
@@ -1911,19 +1926,19 @@ struct timer_struct
 };
 
 // Brightness level per pattern
-const uint8_t brightVal[ARRAY_SIZE(patterns)] =
+const uint8_t brightVal[11] =
 {
     192, 192, 225, 225, 225, 225, 225, 255, 255, 192, 225
 };
 
 // Delay for incrementing gHue variable per pattern
-const uint8_t hueStep[ARRAY_SIZE(patterns)] =
+const uint8_t hueStep[11] =
 {
     10, 15, 8, 1, 10, 1, 1, 1, 1, 1, 1
 };
 
 // Delay inserted into loop() per pattern
-unsigned long patternDelay[ARRAY_SIZE(patterns)] =
+unsigned long patternDelay[11] =
 {
     0, 0, 0, 55, 55, 5, 10, 15, 15, 15, 0
 };
@@ -2306,7 +2321,7 @@ void rainbow_vert()
 #endif
 
 // #################### Clock
-#if DEVICE_TYPE == 2
+#if DEVICE_TYPE == 2 || DEVICE_TYPE == 6
 unsigned long sendNTPpacket(IPAddress& address)
 {
     //Serial.println("sending NTP packet...");
@@ -2326,12 +2341,16 @@ unsigned long sendNTPpacket(IPAddress& address)
 
     // all NTP fields have been given values, now
     // you can send a packet requesting a timestamp:
+    while (udpTime.parsePacket() > 0); // discard packets remaining to be parsed
+
     udpTime.beginPacket(address, 123); //NTP requests are to port 123
     udpTime.write(packetBuffer, NTP_PACKET_SIZE);
     udpTime.endPacket();
 }
 
 void PrintTime() {
+    Serial.print(days);
+    Serial.print(" ");
     if (hours < 10)Serial.print("0");
     Serial.print(hours);
     Serial.print(':');
@@ -2345,40 +2364,46 @@ void PrintTime() {
 
 bool GetTime()
 {
-    WiFi.hostByName(ntpServerName, timeServerIP);
+    Serial.println("Requesting time");
 
-    sendNTPpacket(timeServerIP);
-    delay(1000);
-    ntp_timestamp = millis();
-
-    int cb = udpTime.parsePacket();
-    if (!cb) {
+    if (!WiFi.hostByName(ntpServerName, timeServerIP)) {
+        Serial.print("Lookup of ");
+        Serial.print(ntpServerName);
+        Serial.println(" failed");
         return false;
     }
-    else {
-        //Serial.print("packet received, length=");
-        //Serial.println(cb);
-        udpTime.read(packetBuffer, NTP_PACKET_SIZE);
-        ntp_timestamp = millis();
 
-        unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
-        unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);
-        unsigned long secsSince1900 = highWord << 16 | lowWord;
-        const unsigned long seventyYears = 2208988800UL;
-        unsigned long epoch = secsSince1900 - seventyYears;
+    sendNTPpacket(timeServerIP);
+    ntp_timestamp = millis();
+    while (millis() - ntp_timestamp < 1500) {
+        int cb = udpTime.parsePacket();
+        if (cb >= 48) {
+            Serial.print("NTP response packet received, length=");
+            Serial.println(cb);
+            udpTime.read(packetBuffer, NTP_PACKET_SIZE);
+            ntp_timestamp = millis();
 
-        hours = (epoch % 86400L) / 3600;
-        hours += t_offset;
-        if (hours >= 24)hours -= 24;
-        if (hours < 0)    hours += 24;
-        mins = (epoch % 3600) / 60;
-        secs = (epoch % 60);
+            unsigned long secsSince1900 = packetBuffer[40] << 24;
+            secsSince1900 |= packetBuffer[41] << 16;
+            secsSince1900 |= packetBuffer[42] << 8;
+            secsSince1900 |= packetBuffer[43];
 
-        Serial.println("Requesting time");
+            const unsigned long seventyYears = 2208988800UL;
+            unsigned long epoch = secsSince1900 - seventyYears + (t_offset * 3600);
 
-        PrintTime();
-        return true;
+            days = epoch / 86400L;
+            hours = (epoch % 86400L) / 3600;
+            mins = (epoch % 3600) / 60;
+            secs = (epoch % 60);
+
+            PrintTime();
+            return true;
+        }
+        delay(100);
     }
+
+    Serial.println("Error: no NTP response received");
+    return false;
 }
 
 bool shouldUpdateNTP()
@@ -2423,6 +2448,44 @@ void displayTime(CRGB x = CRGB(0, 0, 0))
         DrawDots(x.r, x.g, x.b, 0);
     }
 }
+
+#if DEVICE_TYPE == 6
+void displayCountdown(CRGB x = CRGB(0, 0, 0))
+{
+    int daysLeft = christmasDay - days;
+    Serial.print(daysLeft); Serial.println(" days left until Christmas");
+    if (daysLeft == 0) {
+        currentPatternIndex = 5; // confetti
+        return;
+    }
+    CRGB c = CRGB(0, 0, 0);
+    if (x.r == 0 && x.g == 0 && x.b == 0)
+    {
+        hsv2rgb_rainbow(CHSV(gHue, 255, 255), c);
+        DrawDays(daysLeft, c.r, c.g, c.b, 0);
+    }
+    else
+    {
+        DrawDays(daysLeft, x.r, x.g, x.b, 0);
+    }
+}
+
+void displayDaysLeftUntilChristmasStatic()
+{
+    bool fresh_update = false;
+    if (shouldUpdateNTP())
+    {
+        fresh_update = GetTime();
+    }
+    if (fresh_update || shouldUpdateTime())
+    {
+        if (incrementTime() || fresh_update)
+        {
+            displayCountdown(solidColor);
+        }
+    }
+}
+#endif
 
 void displayTimeStatic()
 {
@@ -2542,7 +2605,10 @@ bool incrementTime()
         hours++;
         retval = true;
     }
-    if (hours >= 24) hours -= 24;
+    if (hours >= 24) {
+        hours -= 24;
+        days++;
+    }
     PrintTime();
     last_diff = millis() - update_timestamp - 1000;
     return retval;
@@ -2554,12 +2620,31 @@ void DrawTime(int r, int g, int b, int hueMode)
 #define LEDS_PER_SEGMENT (Digit2 / 7)
     for (int l = 0; l < LEDS_PER_SEGMENT; l++)
     {
-        if (hours < 10) DrawDigit(Digit1 + l, LEDS_PER_SEGMENT, r, g, b, -1, hueMode);        // Turn off leading zero
-        else DrawDigit(Digit1 + l, LEDS_PER_SEGMENT, r, g, b, hours / 10, hueMode); //Draw the first digit of the hour
+        if (hours < 10) {
+            DrawDigit(Digit1 + l, LEDS_PER_SEGMENT, r, g, b, -1, hueMode);        // Turn off leading zero
+        }
+        else {
+            DrawDigit(Digit1 + l, LEDS_PER_SEGMENT, r, g, b, hours / 10, hueMode); //Draw the first digit of the hour
+        }
         DrawDigit(Digit2 + l, LEDS_PER_SEGMENT, r, g, b, hours - ((hours / 10) * 10), hueMode); //Draw the second digit of the hour
 
         DrawDigit(Digit3 + l, LEDS_PER_SEGMENT, r, g, b, mins / 10, hueMode); //Draw the first digit of the minute
         DrawDigit(Digit4 + l, LEDS_PER_SEGMENT, r, g, b, mins - ((mins / 10) * 10), hueMode); //Draw the second digit of the minute
+    }
+}
+
+void DrawDays(int daysLeft, int r, int g, int b, int hueMode)
+{
+#define LEDS_PER_SEGMENT (Digit2 / 7)
+    for (int l = 0; l < LEDS_PER_SEGMENT; l++)
+    {
+        if (daysLeft < 10) {
+            DrawDigit(Digit2, LEDS_PER_SEGMENT, r, g, b, -1, hueMode);        // Turn off leading zero
+        }
+        else {
+            DrawDigit(Digit2, LEDS_PER_SEGMENT, r, g, b, (daysLeft / 10) % 10, hueMode); //Draw the first digit of the days left
+        }
+        DrawDigit(Digit1, LEDS_PER_SEGMENT, r, g, b, daysLeft % 10, hueMode); //Draw the second digit of the days left
     }
 }
 
@@ -2600,13 +2685,21 @@ void DrawDigit(int offset, int segmentLedCount, int r, int g, int b, int n, int 
     CRGB rgb = CRGB(r, g, b);
     if (n == 2 || n == 3 || n == 4 || n == 5 || n == 6 || n == 8 || n == 9) //MIDDLE
     {
+        dDHelper(offset, 6, s, hueMode, rgb);
+    }
+    else
+    {
+        dDHelper(offset, 6, s, 0);
+    }
+    if (n == 0 || n == 1 || n == 2 || n == 3 || n == 4 || n == 7 || n == 8 || n == 9) //TOP RIGHT
+    {
         dDHelper(offset, 0, s, hueMode, rgb);
     }
     else
     {
         dDHelper(offset, 0, s, 0);
     }
-    if (n == 0 || n == 1 || n == 2 || n == 3 || n == 4 || n == 7 || n == 8 || n == 9) //TOP RIGHT
+    if (n == 0 || n == 2 || n == 3 || n == 5 || n == 6 || n == 7 || n == 8 || n == 9) //TOP
     {
         dDHelper(offset, 1, s, hueMode, rgb);
     }
@@ -2614,7 +2707,7 @@ void DrawDigit(int offset, int segmentLedCount, int r, int g, int b, int n, int 
     {
         dDHelper(offset, 1, s, 0);
     }
-    if (n == 0 || n == 2 || n == 3 || n == 5 || n == 6 || n == 7 || n == 8 || n == 9) //TOP
+    if (n == 0 || n == 4 || n == 5 || n == 6 || n == 8 || n == 9) //TOP LEFT
     {
         dDHelper(offset, 2, s, hueMode, rgb);
     }
@@ -2622,7 +2715,7 @@ void DrawDigit(int offset, int segmentLedCount, int r, int g, int b, int n, int 
     {
         dDHelper(offset, 2, s, 0);
     }
-    if (n == 0 || n == 4 || n == 5 || n == 6 || n == 8 || n == 9) //TOP LEFT
+    if (n == 0 || n == 2 || n == 6 || n == 8) //BOTTOM LEFT
     {
         dDHelper(offset, 3, s, hueMode, rgb);
     }
@@ -2630,7 +2723,7 @@ void DrawDigit(int offset, int segmentLedCount, int r, int g, int b, int n, int 
     {
         dDHelper(offset, 3, s, 0);
     }
-    if (n == 0 || n == 2 || n == 6 || n == 8) //BOTTOM LEFT
+    if (n == 0 || n == 2 || n == 3 || n == 5 || n == 6 || n == 8 || n == 9) //BOTTOM
     {
         dDHelper(offset, 4, s, hueMode, rgb);
     }
@@ -2638,21 +2731,13 @@ void DrawDigit(int offset, int segmentLedCount, int r, int g, int b, int n, int 
     {
         dDHelper(offset, 4, s, 0);
     }
-    if (n == 0 || n == 2 || n == 3 || n == 5 || n == 6 || n == 8 || n == 9) //BOTTOM
+    if (n == 0 || n == 1 || n == 3 || n == 4 || n == 5 || n == 6 || n == 7 || n == 8 || n == 9) //BOTTOM RIGHT
     {
         dDHelper(offset, 5, s, hueMode, rgb);
     }
     else
     {
         dDHelper(offset, 5, s, 0);
-    }
-    if (n == 0 || n == 1 || n == 3 || n == 4 || n == 5 || n == 6 || n == 7 || n == 8 || n == 9) //BOTTOM RIGHT
-    {
-        dDHelper(offset, 6, s, hueMode, rgb);
-    }
-    else
-    {
-        dDHelper(offset, 6, s, 0);
     }
 }
 #endif
@@ -2664,9 +2749,6 @@ void DrawDigit(int offset, int segmentLedCount, int r, int g, int b, int n, int 
 void initUdp(int port)
 {
     Udp.begin(port);
-#if DEVICE_TYPE == 2
-    udpTime.begin(localPortTime);
-#endif
 }
 
 bool parseUdp()
