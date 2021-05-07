@@ -101,7 +101,7 @@ extern "C" {
 // Device Configuration:
 //---------------------------------------------------------------------------------------------------------//
 #if DEVICE_TYPE == 0                // Generic LED-Strip
-    #define NUM_LEDS 6
+    #define NUM_LEDS 28
     //#define NUM_LEDS 33
     //#define NUM_LEDS 183
     #define BAND_GROUPING    1            // Groups part of the band to save performance and network traffic
@@ -119,13 +119,10 @@ extern "C" {
     #define NUM_LEDS 28
     #define Digit1 0
     #define Digit2 14
-    // Digit3 and Digit4 are not needed for countdown
+    // Digit3 and Digit4 are not needed for countdown (DEVICE_TYPE == 6)
     #define Digit3 30
     #define Digit4 44
     // Values for the Big Clock: 58, 0, 14, 30, 44
-  #if DEVICE_TYPE == 6     // Christmas countdown
-    long christmasDay = 18624;
-  #endif
 
 #elif DEVICE_TYPE == 3              // Desk Lamp
     #define LINE_COUNT    8             // Amount of led strip pieces
@@ -149,8 +146,8 @@ extern "C" {
 //---------------------------------------------------------------------------------------------------------//
     #define ACCESS_POINT_MODE                 // the esp8266 will create a wifi-access point instead of connecting to one, credentials must be in Secrets.h
 
-    //#define ENABLE_OTA_SUPPORT                // requires ArduinoOTA - library, not working on esp's with 1MB memory (esp-01, Wemos D1 lite ...)
-        //#define OTA_PASSWORD "passwd123"      //  password that is required to update the esp's firmware wireless
+    #define ENABLE_OTA_SUPPORT                // requires ArduinoOTA - library, not working on esp's with 1MB memory (esp-01, Wemos D1 lite ...)
+    #define OTA_PASSWORD "xmas123"      //  password that is required to update the esp's firmware wireless
 
     #define ENABLE_MULTICAST_DNS              // allows to access the UI via "http://<HOSTNAME>.local/", implemented by GitHub/WarDrake
 
@@ -328,12 +325,10 @@ if you have connected the ring first it should look like this: const int twpOffs
     IPAddress timeServerIP;
     WiFiUDP udpTime;
 
+    #include <TimeLib.h>
+
     byte packetBuffer[NTP_PACKET_SIZE];
-    int days = 0; int hours = 0; int mins = 0; int secs = 0;
     unsigned int localPortTime = 2390;
-    unsigned long update_timestamp = 0;
-    unsigned long last_diff = 0;
-    unsigned long ntp_timestamp = 0;
 
 #elif DEVICE_TYPE == 3
     #define NUM_LEDS      (LINE_COUNT * LEDS_PER_LINE)
@@ -1106,16 +1101,10 @@ void setup() {
 
 #if DEVICE_TYPE == 2 || DEVICE_TYPE == 6
     udpTime.begin(localPortTime);
-    int tries = 3;
-    while (tries-- > 0) {
-        if (GetTime()) {
-            tries = 0;
-        }
-        else {
-            delay(300);
-        }
-    }
+    setSyncProvider(GetTimeFromNTP);
+    setSyncInterval(NTP_REFRESH_INTERVAL_SECONDS);
 #endif
+    
     //  webSocketsServer.begin();
     //  webSocketsServer.onEvent(webSocketEvent);
     //  Serial.println("Web socket server started");
@@ -2348,21 +2337,7 @@ unsigned long sendNTPpacket(IPAddress& address)
     udpTime.endPacket();
 }
 
-void PrintTime() {
-    Serial.print(days);
-    Serial.print(" ");
-    if (hours < 10)Serial.print("0");
-    Serial.print(hours);
-    Serial.print(':');
-    if (mins < 10)Serial.print("0");
-    Serial.print(mins);
-    Serial.print(':');
-    if (secs < 10)Serial.print("0");
-    Serial.println(secs);
-}
-
-
-bool GetTime()
+time_t GetTimeFromNTP()
 {
     Serial.println("Requesting time");
 
@@ -2370,55 +2345,45 @@ bool GetTime()
         Serial.print("Lookup of ");
         Serial.print(ntpServerName);
         Serial.println(" failed");
-        return false;
+        return 0;
     }
 
-    sendNTPpacket(timeServerIP);
-    ntp_timestamp = millis();
-    while (millis() - ntp_timestamp < 1500) {
-        int cb = udpTime.parsePacket();
-        if (cb >= 48) {
-            Serial.print("NTP response packet received, length=");
-            Serial.println(cb);
-            udpTime.read(packetBuffer, NTP_PACKET_SIZE);
-            ntp_timestamp = millis();
+    int tries = 3;
 
-            unsigned long secsSince1900 = packetBuffer[40] << 24;
-            secsSince1900 |= packetBuffer[41] << 16;
-            secsSince1900 |= packetBuffer[42] << 8;
-            secsSince1900 |= packetBuffer[43];
+    while (tries > 0) {
+        sendNTPpacket(timeServerIP);
+        unsigned long timeout = millis();
+        while (millis() - timeout < 500) {
+            int cb = udpTime.parsePacket();
+            if (cb >= 48) {
+                Serial.print("NTP response packet received, length=");
+                Serial.println(cb);
+                udpTime.read(packetBuffer, NTP_PACKET_SIZE);
 
-            const unsigned long seventyYears = 2208988800UL;
-            unsigned long epoch = secsSince1900 - seventyYears + (t_offset * 3600);
+                unsigned long secsSince1900 = packetBuffer[40] << 24;
+                secsSince1900 |= packetBuffer[41] << 16;
+                secsSince1900 |= packetBuffer[42] << 8;
+                secsSince1900 |= packetBuffer[43];
 
-            days = epoch / 86400L;
-            hours = (epoch % 86400L) / 3600;
-            mins = (epoch % 3600) / 60;
-            secs = (epoch % 60);
-
-            PrintTime();
-            return true;
+                const time_t seventyYears = 2208988800UL;
+                return secsSince1900 - seventyYears + (t_offset * 3600);
+            }
+            delay(10);
         }
-        delay(100);
     }
 
     Serial.println("Error: no NTP response received");
-    return false;
-}
-
-bool shouldUpdateNTP()
-{
-    if (switchedTimePattern || (millis() - ntp_timestamp) > (NTP_REFRESH_INTERVAL_SECONDS * 1000)) {
-        switchedTimePattern = false;
-        return true;
-    }
-    return false;
+    return 0;
 }
 
 bool shouldUpdateTime()
 {
-    if ((millis() - update_timestamp) > (1000))return true;
-    return false;
+    static unsigned int lastMinute = 0;
+
+    unsigned int minute = ::now() / 60;
+    bool changed = lastMinute != minute;
+    lastMinute = minute;
+    return changed;
 }
 
 void DrawDots(int r, int g, int b, int hueMode)
@@ -2450,14 +2415,23 @@ void displayTime(CRGB x = CRGB(0, 0, 0))
 }
 
 #if DEVICE_TYPE == 6
-void displayCountdown(CRGB x = CRGB(0, 0, 0))
-{
-    int daysLeft = christmasDay - days;
-    Serial.print(daysLeft); Serial.println(" days left until Christmas");
-    if (daysLeft == 0) {
-        currentPatternIndex = 5; // confetti
-        return;
+time_t nextChristmas() {
+    tmElements_t t;
+    breakTime(now(), t);
+    t.Hour = 0;
+    t.Minute = 0;
+    t.Second = 0;
+    if (t.Month == 12 && t.Day > 25) {
+        t.Year++;
     }
+    t.Month = 12;
+    t.Day = 25;
+    return makeTime(t);
+}
+
+void displayCountdown(int daysLeft, CRGB x = CRGB(0, 0, 0))
+{
+    Serial.print(daysLeft); Serial.println(" days left until Christmas");
     CRGB c = CRGB(0, 0, 0);
     if (x.r == 0 && x.g == 0 && x.b == 0)
     {
@@ -2472,70 +2446,39 @@ void displayCountdown(CRGB x = CRGB(0, 0, 0))
 
 void displayDaysLeftUntilChristmasStatic()
 {
-    bool fresh_update = false;
-    if (shouldUpdateNTP())
-    {
-        fresh_update = GetTime();
+    int daysLeft = nextChristmas()/86400 - now()/86400;
+    if (daysLeft == 0) {
+        retroC9Twinkles();
+        return;
     }
-    if (fresh_update || shouldUpdateTime())
+
+    if (shouldUpdateTime() || updateColorsEverySecond)
     {
-        if (incrementTime() || fresh_update)
-        {
-            displayCountdown(solidColor);
-        }
+        displayCountdown(daysLeft, solidColor);
     }
 }
 #endif
 
 void displayTimeStatic()
 {
-    bool fresh_update = false;
-    if (shouldUpdateNTP())
+    if (shouldUpdateTime())
     {
-        fresh_update = GetTime();
-    }
-    if (fresh_update || shouldUpdateTime())
-    {
-        if (incrementTime() || fresh_update)
-        {
-            displayTime(solidColor);
-        }
+        displayTime(solidColor);
     }
 }
 
 void displayTimeRainbow()
 {
-    bool fresh_update = false;
-    if (shouldUpdateNTP())
+    if (shouldUpdateTime())
     {
-        fresh_update = GetTime();
-    }
-    if (fresh_update || shouldUpdateTime())
-    {
-        if (incrementTime()  || fresh_update)
-        {
-            displayTime();
-        }
+        displayTime(solidColor);
     }
 }
 
 void displayTimeColorful()
 {
-    bool fresh_update = false;
-    if (shouldUpdateNTP())
+    if (shouldUpdateTime() || updateColorsEverySecond)
     {
-        fresh_update = GetTime();
-    }
-    if (fresh_update || shouldUpdateTime())
-    {
-        if (incrementTime() || fresh_update)
-        {
-            CRGB x = CRGB(255, 0, 0);
-            DrawTime(x.r, x.g, x.b, 1);
-            DrawDots(x.r, x.g, x.b, 1);
-        }
-    }
-    else if (updateColorsEverySecond) {
         CRGB x = CRGB(255, 0, 0);
         DrawTime(x.r, x.g, x.b, 1);
         DrawDots(x.r, x.g, x.b, 1);
@@ -2544,21 +2487,8 @@ void displayTimeColorful()
 
 void displayTimeGradient()
 {
-    bool fresh_update = false;
-    if (shouldUpdateNTP())
+    if (shouldUpdateTime() || updateColorsEverySecond)
     {
-        fresh_update = GetTime();
-    }
-    if (fresh_update || shouldUpdateTime())
-    {
-        if (incrementTime() || fresh_update)
-        {
-            CRGB x = CRGB(255, 0, 0);
-            DrawTime(x.r, x.g, x.b, 5);
-            DrawDots(x.r, x.g, x.b, 5);
-        }
-    }
-    else if(updateColorsEverySecond){
         CRGB x = CRGB(255, 0, 0);
         DrawTime(x.r, x.g, x.b, 5);
         DrawDots(x.r, x.g, x.b, 5);
@@ -2567,57 +2497,20 @@ void displayTimeGradient()
 
 void displayTimeGradientLarge()
 {
-    bool fresh_update = false;
-    if (shouldUpdateNTP())
+    if (shouldUpdateTime() || updateColorsEverySecond)
     {
-        fresh_update = GetTime();
-    }
-    if (fresh_update || shouldUpdateTime())
-    {
-        if (incrementTime() || fresh_update)
-        {
-            CRGB x = CRGB(255, 0, 0);
-            DrawTime(x.r, x.g, x.b, 3);
-            DrawDots(x.r, x.g, x.b, 3);
-        }
-    }
-    else if (updateColorsEverySecond) {
         CRGB x = CRGB(255, 0, 0);
         DrawTime(x.r, x.g, x.b, 3);
         DrawDots(x.r, x.g, x.b, 3);
     }
 }
 
-bool incrementTime()
-{
-    bool retval = false;
-    secs++;
-    update_timestamp = millis();
-    if (secs >= 60)
-    {
-        secs -= 60;
-        mins++;
-        retval = true;
-    }
-    if (mins >= 60)
-    {
-        mins -= 60;
-        hours++;
-        retval = true;
-    }
-    if (hours >= 24) {
-        hours -= 24;
-        days++;
-    }
-    PrintTime();
-    last_diff = millis() - update_timestamp - 1000;
-    return retval;
-}
-
-
 void DrawTime(int r, int g, int b, int hueMode)
 {
 #define LEDS_PER_SEGMENT (Digit2 / 7)
+    time_t t = ::now();
+    int hours = ::hour(t);
+    int mins = ::minute(t);
     for (int l = 0; l < LEDS_PER_SEGMENT; l++)
     {
         if (hours < 10) {
